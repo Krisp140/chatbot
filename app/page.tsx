@@ -1,25 +1,186 @@
 'use client';
 import { useState } from 'react';
-import { Brain, Send, Dna, Bot, User, Loader2, Sparkles, FlaskRound } from 'lucide-react';
+import { Brain, Send, Dna, Bot, User, Loader2, Sparkles, FlaskRound, Calendar } from 'lucide-react';
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
+  isScheduling?: boolean;
 }
+
+interface NoteState {
+  isCollecting: boolean;
+  hasName: boolean;
+  name?: string;
+}
+
+
+// Function to get scheduling link
+const get_scheduling_link = () => {
+  return "https://calendly.com/kristianpraizner99/30min";
+};
+
+// Check if a message is asking for scheduling
+const isSchedulingRequest = (message: string): boolean => {
+  const schedulingKeywords = [
+    'schedule', 'appointment', 'book', 'meeting', 'call', 'talk', 'chat', 
+    'consultation', 'schedule a', 'book a', 'setup a', 'set up a', 'calendly',
+    'scheduling tool', 'find a suitable time', 'find time', 'when can we meet',
+    'when are you available', 'your availability', 'meet with you', 'scheduling link',
+    'meet up', 'talk to you', 'calendar', 'can we meet', 'link to schedule',
+    'please use the scheduling tool'
+  ];
+  
+  const lowerMessage = message.toLowerCase();
+  return schedulingKeywords.some(keyword => lowerMessage.includes(keyword));
+};
+const isNoteRequest = (message: string): boolean => {
+  const noteKeywords = [
+    'take a note', 'make a note', 'create a note', 'write a note',
+    'add a note', 'save a note', 'record a note', 'note this down',
+    'jot this down', 'patient note', 'medical note'
+  ];
+  
+  const lowerMessage = message.toLowerCase();
+  return noteKeywords.some(keyword => lowerMessage.includes(keyword));
+};
 
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-
+  const [noteState, setNoteState] = useState<NoteState>({
+    isCollecting: false,
+    hasName: false,
+  });
+  
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
-
+  
     const userMessage: Message = { role: 'user', content: input.trim() };
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
+  
+    // Handle note collection flow
+    if (noteState.isCollecting) {
+      if (!noteState.hasName) {
+        // Collecting name
+        setNoteState({
+          isCollecting: true,
+          hasName: true,
+          name: userMessage.content
+        });
+        
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `Thanks! What notes would you like to add for ${userMessage.content}?`,
+          isNote: true
+        }]);
+        setIsLoading(false);
+        return;
+      } else {
+        // Collecting notes - submit to Airtable
+        const noteContent = userMessage.content;
+        
+        try {
+          const response = await fetch('/api/airtable', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              name: noteState.name,
+              notes: noteContent
+            }),
+          });
+  
+          const data = await response.json();
+          
+          if (data.success) {
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: `I've saved the note for ${noteState.name}. Is there anything else you'd like me to help with?`,
+              isNote: true
+            }]);
+          } else {
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: `Sorry, I encountered an error saving the note. Please try again.`,
+              isNote: true
+            }]);
+          }
+        } catch (error) {
+          console.error('Error saving note:', error);
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: 'Sorry, I encountered an error saving the note. Please try again.',
+            isNote: true
+          }]);
+        }
+        
+        // Reset note collection state
+        setNoteState({
+          isCollecting: false,
+          hasName: false
+        });
+        setIsLoading(false);
+        return;
+      }
+    }
+  
+    // Check if this is a note request
+    if (isNoteRequest(userMessage.content)) {
+      // Extract name if provided in the initial request
+      let name = '';
+      const nameMatch = userMessage.content.match(/for\s+([a-zA-Z\s]+)(?::|$)/i);
+      if (nameMatch && nameMatch[1].trim()) {
+        name = nameMatch[1].trim();
+      }
+      
+      if (name) {
+        setNoteState({
+          isCollecting: true,
+          hasName: true,
+          name: name
+        });
+        
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `What notes would you like to add for ${name}?`,
+          isNote: true
+        }]);
+      } else {
+        setNoteState({
+          isCollecting: true,
+          hasName: false
+        });
+        
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: 'What is the patient name for this note?',
+          isNote: true
+        }]);
+      }
+      
+      setIsLoading(false);
+      return;
+    }
+
+    // Check if this is a scheduling request
+    if (isSchedulingRequest(userMessage.content)) {
+      const schedulingLink = get_scheduling_link();
+      setTimeout(() => {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `You can schedule an appointment with me using this link: ${schedulingLink}`,
+          isScheduling: true
+        }]);
+        setIsLoading(false);
+      }, 500); // Small delay to make it feel more natural
+      return;
+    }
 
     try {
       const response = await fetch('/api/chat', {
@@ -82,6 +243,10 @@ export default function Home() {
                   <Brain className="w-4 h-4" />
                   <span>Enhance Cognition</span>
                 </div>
+                <div className="flex items-center gap-2 bg-gray-800 rounded-full px-4 py-2">
+                  <Calendar className="w-4 h-4" />
+                  <span>Schedule Consultation</span>
+                </div>
               </div>
             </div>
           ) : (
@@ -101,6 +266,8 @@ export default function Home() {
                     }`}>
                       {message.role === 'user' ? (
                         <User className="w-5 h-5" />
+                      ) : message.isScheduling ? (
+                        <Calendar className="w-5 h-5" />
                       ) : (
                         <Bot className="w-5 h-5" />
                       )}
@@ -109,6 +276,8 @@ export default function Home() {
                       className={`p-3 rounded-lg ${
                         message.role === 'user'
                           ? 'bg-cyan-600 text-white'
+                          : message.isScheduling
+                          ? 'bg-green-800 text-gray-100'
                           : 'bg-gray-800 text-gray-100'
                       }`}
                     >
@@ -133,7 +302,7 @@ export default function Home() {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about biohacking, supplements, or optimization..."
+            placeholder="Ask about biohacking, supplements, or schedule a consultation..."
             className="flex-1 bg-gray-900 text-white placeholder-gray-400 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-cyan-600 border border-gray-800"
           />
           <button
